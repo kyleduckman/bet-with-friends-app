@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import Image from "next/image";
 
 export default function TopNav() {
   const pathname = usePathname();
@@ -36,6 +37,7 @@ export default function TopNav() {
     { href: "/feed", label: "Global feed" },
     { href: "/bets/new", label: "Place a bet" },
     { href: "/bets", label: "My bets" },
+    { href: "/live", label: "Live scores" },
   ];
 
   return (
@@ -47,17 +49,18 @@ export default function TopNav() {
             href="/"
             className="flex items-center gap-2 hover:opacity-90 transition"
           >
-            <div className="h-8 w-8 rounded-xl bg-emerald-500 flex items-center justify-center text-xs font-black">
-              BF
-            </div>
-            <div>
-              <div className="text-sm font-semibold leading-tight">
-                Bet With Friends
-              </div>
-              <div className="text-[11px] text-slate-400 leading-tight">
-                Ride with the squad.
-              </div>
-            </div>
+            <Image
+  src="/bwf-high-resolution-logo-transparent.png"        // make sure this matches your file name
+  alt="Bet With Friends Logo"
+  width={190
+  }
+  height={5
+
+  }
+  className="rounded-lg"
+  priority
+/>
+        
           </Link>
         </div>
 

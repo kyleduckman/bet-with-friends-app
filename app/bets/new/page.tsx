@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -26,32 +26,15 @@ const SPORTS = [
   { key: "americanfootball_nfl", label: "NFL" },
   { key: "americanfootball_ncaaf", label: "NCAAF" },
   { key: "basketball_nba", label: "NBA" },
-  { key: "basketball_ncaab", label: "NCAA B" },
+  { key: "basketball_ncaab", label: "NCAAB" },
   { key: "baseball_mlb", label: "MLB" },
   { key: "icehockey_nhl", label: "NHL" },
   { key: "soccer_epl", label: "EPL" },
 ];
 
-// --- helper functions to compute parlay odds ---
+// ---------- Inner page that actually uses hooks like useSearchParams ----------
 
-function americanToDecimal(american: number): number {
-  if (american === 0) return 1;
-  if (american > 0) {
-    return 1 + american / 100;
-  }
-  return 1 + 100 / Math.abs(american);
-}
-
-function decimalToAmerican(decimal: number): number {
-  const profit = decimal - 1;
-  if (profit <= 0) return 0;
-  if (profit >= 1) {
-    return Math.round(profit * 100);
-  }
-  return Math.round(-100 / profit);
-}
-
-export default function NewBetPage() {
+function NewBetPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -192,21 +175,6 @@ export default function NewBetPage() {
     await submitSingleBet();
   }
 
-  // 👉 live combined parlay odds + decimal odds + to-win calculation
-  const combinedDecimal =
-    legs.length > 0
-      ? legs.reduce((acc, leg) => acc * americanToDecimal(leg.odds), 1)
-      : null;
-
-  const combinedOdds =
-    combinedDecimal !== null ? decimalToAmerican(combinedDecimal) : null;
-
-  const stakeNumber = parseFloat(stake || "");
-  const toWin =
-    combinedDecimal !== null && !Number.isNaN(stakeNumber)
-      ? stakeNumber * (combinedDecimal - 1)
-      : null;
-
   async function handleSubmitParlay() {
     if (legs.length < 2) {
       alert("You need at least 2 legs for a parlay.");
@@ -227,12 +195,6 @@ export default function NewBetPage() {
     const username =
       (user.user_metadata && (user.user_metadata as any).username) || null;
 
-    const combinedOddsToStore =
-      combinedOdds ??
-      decimalToAmerican(
-        legs.reduce((acc, leg) => acc * americanToDecimal(leg.odds), 1)
-      );
-
     // 1. create parlay row
     const { data: parlayRow, error: parlayError } = await supabase
       .from("parlays")
@@ -241,8 +203,7 @@ export default function NewBetPage() {
         user_email: user.email,
         user_username: username,
         stake: stake ? Number(stake) : null,
-        potential_payout: null, // could store toWin later if you want
-        combined_odds: combinedOddsToStore,
+        potential_payout: null, // compute later if you want
       })
       .select()
       .single();
@@ -287,6 +248,41 @@ export default function NewBetPage() {
   const singleHasPick = !!(game && team);
   const picksCount = mode === "single" ? (singleHasPick ? 1 : 0) : legs.length;
 
+  // simple parlay odds calculation (optional, invisible if no legs)
+  function calculateParlayDecimalOdds(): number | null {
+    if (!legs.length) return null;
+    let product = 1;
+    for (const leg of legs) {
+      const o = leg.odds;
+      if (!o) return null;
+      const decimal = o > 0 ? 1 + o / 100 : 1 + 100 / Math.abs(o);
+      product *= decimal;
+    }
+    return product;
+  }
+
+  function calculateParlayToWin(): number | null {
+    const decimal = calculateParlayDecimalOdds();
+    if (!decimal || !stake) return null;
+    const stakeNum = Number(stake);
+    if (!stakeNum || isNaN(stakeNum)) return null;
+    return stakeNum * (decimal - 1);
+  }
+
+  function calculateParlayAmericanOdds(): number | null {
+    const decimal = calculateParlayDecimalOdds();
+    if (!decimal) return null;
+    const profitPer1 = decimal - 1;
+    if (profitPer1 >= 1) {
+      return Math.round(profitPer1 * 100);
+    } else {
+      return Math.round(-100 / profitPer1);
+    }
+  }
+
+  const parlayAmericanOdds = calculateParlayAmericanOdds();
+  const parlayToWin = calculateParlayToWin();
+
   return (
     <div className="min-h-screen bg-slate-900 text-white flex justify-center">
       <div className="w-full max-w-5xl p-6 mt-6">
@@ -297,28 +293,17 @@ export default function NewBetPage() {
             onClick={() => setShowPicksPanel((prev) => !prev)}
             className="w-full md:w-auto flex items-center justify-between md:justify-start gap-3 px-4 py-2 rounded-xl bg-slate-800 border border-slate-700 hover:border-emerald-400/70 hover:bg-slate-800/80 transition text-sm"
           >
-            <div className="flex flex-col md:flex-row md:items-center md:gap-3 w-full">
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  Picks
-                </span>
-                <span className="text-slate-100 font-medium">
-                  {picksCount === 0
-                    ? "No picks selected yet"
-                    : `${picksCount} pick${
-                        picksCount === 1 ? "" : "s"
-                      } selected`}
-                </span>
-              </div>
-
-              {mode === "parlay" && combinedOdds !== null && (
-                <div className="mt-1 md:mt-0 text-xs text-indigo-300">
-                  Current parlay odds:{" "}
-                  {combinedOdds > 0 ? `+${combinedOdds}` : combinedOdds}
-                </div>
-              )}
+            <div className="flex items-center gap-2">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                Picks
+              </span>
+              <span className="text-slate-100 font-medium">
+                {picksCount === 0
+                  ? "No picks selected yet"
+                  : `${picksCount} pick${picksCount === 1 ? "" : "s"} selected`}
+              </span>
             </div>
-            <span className="text-xs text-slate-400 ml-3">
+            <span className="text-xs text-slate-400">
               {showPicksPanel ? "Hide" : "Show"}
             </span>
           </button>
@@ -369,13 +354,6 @@ export default function NewBetPage() {
 
               {mode === "parlay" && (
                 <>
-                  {combinedOdds !== null && (
-                    <div className="text-xs text-indigo-300 mb-1">
-                      Current parlay odds:{" "}
-                      {combinedOdds > 0 ? `+${combinedOdds}` : combinedOdds}
-                    </div>
-                  )}
-
                   {legs.length === 0 ? (
                     <p className="text-xs text-slate-400">
                       Tap selections below to build your parlay.
@@ -391,7 +369,9 @@ export default function NewBetPage() {
                             <div>
                               <div className="font-semibold">
                                 {leg.team} {leg.betType}{" "}
-                                {leg.odds > 0 ? `(+${leg.odds})` : `(${leg.odds})`}
+                                {leg.odds > 0
+                                  ? `(+${leg.odds})`
+                                  : `(${leg.odds})`}
                               </div>
                               <div className="text-xs text-slate-400">
                                 {leg.game}
@@ -400,9 +380,12 @@ export default function NewBetPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                // remove leg and its highlight
                                 setLegs((prev) =>
                                   prev.filter((_, i) => i !== idx)
+                                );
+                                const keyToRemove = selectedOutcomeKeys[idx];
+                                setSelectedOutcomeKeys((prev) =>
+                                  prev.filter((k) => k !== keyToRemove)
                                 );
                               }}
                               className="text-[11px] text-red-400 hover:text-red-300"
@@ -413,40 +396,45 @@ export default function NewBetPage() {
                         ))}
                       </ul>
 
-                      <div className="flex flex-col md:flex-row items-stretch gap-3 mt-3">
-                        <div className="flex-1">
-                          <label className="block text-xs text-slate-300 mb-1">
-                            Parlay stake ($)
-                          </label>
-                          <input
-                            className="w-full rounded-md border border-slate-600 bg-slate-950 text-white px-3 py-2 text-sm"
-                            placeholder="25"
-                            value={stake}
-                            onChange={(e) => setStake(e.target.value)}
-                          />
-                          <div className="mt-1 text-[11px] text-slate-400">
-                            {toWin !== null ? (
-                              <>
-                                To win:{" "}
-                                <span className="text-emerald-300">
-                                  ${toWin.toFixed(2)}
-                                </span>
-                              </>
-                            ) : (
-                              "To win: —"
+                      <div className="mt-3 space-y-2 text-xs text-slate-300">
+                        {parlayAmericanOdds != null && (
+                          <div>
+                            Parlay odds:{" "}
+                            <span className="text-emerald-300">
+                              {parlayAmericanOdds > 0
+                                ? `+${parlayAmericanOdds}`
+                                : parlayAmericanOdds}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex flex-col md:flex-row items-stretch gap-3 mt-2">
+                          <div className="flex-1">
+                            <label className="block text-xs text-slate-300 mb-1">
+                              Parlay stake ($)
+                            </label>
+                            <input
+                              className="w-full rounded-md border border-slate-600 bg-slate-950 text-white px-3 py-2 text-sm"
+                              placeholder="25"
+                              value={stake}
+                              onChange={(e) => setStake(e.target.value)}
+                            />
+                            {parlayToWin != null && (
+                              <div className="mt-1 text-[11px] text-emerald-300">
+                                To win: ${parlayToWin.toFixed(2)}
+                              </div>
                             )}
                           </div>
+                          <button
+                            type="button"
+                            disabled={legs.length < 2 || !stake || loading}
+                            onClick={handleSubmitParlay}
+                            className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold py-2 rounded-md text-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {loading
+                              ? "Submitting..."
+                              : `Submit ${legs.length}-leg parlay`}
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          disabled={legs.length < 2 || !stake || loading}
-                          onClick={handleSubmitParlay}
-                          className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold py-2 rounded-md text-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {loading
-                            ? "Submitting..."
-                            : `Submit ${legs.length}-leg parlay`}
-                        </button>
                       </div>
                     </>
                   )}
@@ -657,5 +645,21 @@ export default function NewBetPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ---------- Wrapper component with Suspense (required for useSearchParams) ----------
+
+export default function NewBetPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+          <div className="text-sm text-slate-300">Loading bet builder…</div>
+        </div>
+      }
+    >
+      <NewBetPageInner />
+    </Suspense>
   );
 }
